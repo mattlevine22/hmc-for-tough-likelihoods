@@ -1,9 +1,9 @@
 [example]
-id = "low-level-continuous-time-inference"
-title = "Low-level continuous-time inference notebook"
+id = "hmc-for-tough-likelihoods-discrete-lti"
+title = "Tough likelihoods discrete-time LTI notebook"
 status = "reference"
-summary = "A standalone JAX notebook that rebuilds the LTI Gaussian profile-likelihood and NUTS workflow without dynestyx, cd-dynamax, or cuthbert."
-tags = ["continuous-time", "lti", "kalman-filter", "particle-filter", "blackjax", "manual-implementation"]
-notebook = "notebooks/lti_gaussian_low_level.ipynb"
-run_command = "uv run --project . jupyter lab notebooks/lti_gaussian_low_level.ipynb"
-smoke_command = "uv run --project . jupyter nbconvert --to notebook --execute --inplace notebooks/lti_gaussian_low_level.ipynb"
+summary = "A standalone JAX notebook for studying tough likelihoods in a discrete-time LTI state-space model using exact KF and particle-filter inference."
+tags = ["state-space-models", "lti", "kalman-filter", "particle-filter", "blackjax", "nuts"]
+notebook = "notebooks/lti_discrete_time_low_level.ipynb"
+run_command = "uv run --project . jupyter lab notebooks/lti_discrete_time_low_level.ipynb"
+smoke_command = "uv run --project . jupyter nbconvert --to notebook --execute --inplace notebooks/lti_discrete_time_low_level.ipynb"

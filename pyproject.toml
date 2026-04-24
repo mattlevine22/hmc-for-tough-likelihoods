@@ -3,15 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dynestyx-example-low-level-continuous-time-inference"
+name = "hmc-for-tough-likelihoods"
 version = "0.1.0"
-description = "Standalone continuous-time LTI inference notebook with low-level JAX filters and BlackJAX NUTS."
+description = "Benchmarks and tooling for NUTS-like inference with tough likelihoods in state-space models."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "arviz>=0.18,<1.0.0",
     "blackjax>=1.2,<2.0.0",
-    "diffrax>=0.7,<1.0.0",
     "ipykernel>=6.29",
     "jax==0.6.2",
     "jaxlib==0.6.2",
@@ -22,4 +21,4 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/manual_ct_inference", "src/manual_discrete_time_inference"]
+packages = ["src/hmc_for_tough_likelihoods", "src/manual_discrete_time_inference"]

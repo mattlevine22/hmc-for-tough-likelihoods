@@ -38,9 +38,10 @@ The main entry point is:
 
 - Notebook: `notebooks/lti_discrete_time_low_level.ipynb`
 
-The supporting Python package lives under:
+The core Python implementation lives under:
 
 - `src/manual_discrete_time_inference/`
+- `src/hmc_for_tough_likelihoods/` (clean public import surface)
 
 ## Repository Layout
 
@@ -91,7 +92,7 @@ uv run jupyter nbconvert --to notebook --execute --inplace \
 After installing dependencies, you can import the package directly:
 
 ```python
-from manual_discrete_time_inference import (
+from hmc_for_tough_likelihoods import (
     kalman_filter_loglik,
     make_lti_discrete_system,
     particle_filter_loglik,

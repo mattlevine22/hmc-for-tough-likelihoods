@@ -69,11 +69,6 @@ def _gaussian_logpdf(value: Array, mean: Array, cov: Array) -> Array:
     return -0.5 * (dim * jnp.log(2.0 * jnp.pi) + logdet + maha)
 
 
-def _position_dependent_key(base_key: Array, alpha: Array) -> Array:
-    folded = jnp.asarray(jnp.floor((alpha + 10.0) * 1_000_000.0), dtype=jnp.uint32)
-    return jr.fold_in(base_key, folded)
-
-
 def simulate_lti_discrete_gaussian(
     key: Array,
     alpha: Array | float,
@@ -274,7 +269,6 @@ def make_blackjax_logdensity(
     ctrl_values: Array | None = None,
     n_particles: int | None = None,
     fixed_key: Array | None = None,
-    key_mode: str = "deterministic",
     system_kwargs: dict | None = None,
 ):
     obs_values = jnp.asarray(obs_values)
@@ -300,17 +294,11 @@ def make_blackjax_logdensity(
         elif filter_name == "pf":
             if n_particles is None:
                 raise ValueError("n_particles is required for PF log density.")
-            if key_mode == "fixed":
-                key = fixed_key
-            elif key_mode == "hashed_position":
-                key = _position_dependent_key(fixed_key, alpha)
-            else:
-                raise ValueError(f"Unknown key_mode: {key_mode!r}")
             loglik = particle_filter_loglik(
                 alpha,
                 obs_values=obs_values,
                 n_particles=n_particles,
-                key=key,
+                key=fixed_key,
                 ctrl_values=ctrl_values,
                 system_kwargs=system_kwargs,
             )
