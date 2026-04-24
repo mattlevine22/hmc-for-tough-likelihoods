@@ -19,37 +19,62 @@ randomness control, or different estimators entirely?
 
 ## What Is In This Repo
 
-Right now the repo contains a discrete-time linear time-invariant (LTI)
-Gaussian example with a single unknown parameter. It is a useful first testbed
-because we can compute the marginal likelihood exactly with a Kalman filter,
-then compare that ground truth against particle-based approximations and study
-how controlled degradations distort the surface seen by downstream samplers.
+The repo currently contains two low-level benchmark cases:
 
-The current example includes:
+1. A discrete-time linear time-invariant (LTI) Gaussian model with one unknown
+parameter.
+2. A continuous-time LTI Gaussian SDE with one unknown parameter.
 
-- synthetic data generation for a 2D latent linear Gaussian model
-- exact marginal likelihood evaluation with a Kalman filter
-- approximate marginal likelihood evaluation with a bootstrap particle filter
-- posterior inference over a scalar system parameter with BlackJAX NUTS
-- notebook-based visualisation of trajectories, posterior samples, and filter
-  comparisons
+Both notebooks compare exact Kalman-filter marginal likelihoods against
+particle-filter approximations and then study the consequences for NUTS-style
+inference. The point is not only to have two examples, but to have two examples
+with qualitatively different levels of difficulty.
 
-The main entry point is:
+### Case 1: Discrete-Time LTI
 
-- Notebook: `notebooks/lti_discrete_time_low_level.ipynb`
+Notebook: `notebooks/lti_discrete_time_low_level.ipynb`
+
+This is the mild case.
+
+- fast to run
+- exact marginal likelihood available from the Kalman filter
+- particle-filter distortions are visible but relatively controlled
+- useful as a first sandbox for profiling roughness, bias, and sampler behavior
+
+### Case 2: Continuous-Time LTI
+
+Notebook: `notebooks/lti_gaussian_low_level.ipynb`
+
+This is the more catastrophic case.
+
+- much slower to run because the particle propagation is continuous-time
+- exact marginal likelihood still available as a baseline after discretization
+- approximate likelihood geometry is substantially harsher
+- intended as the stronger failure-mode benchmark when the discrete-time case is
+  not difficult enough
 
 The core Python implementation lives under:
 
+- `src/manual_ct_inference/`
 - `src/manual_discrete_time_inference/`
-- `src/hmc_for_tough_likelihoods/` (clean public import surface)
+- `src/hmc_for_tough_likelihoods/` (clean public import surface for the
+  discrete-time API)
 
 ## Repository Layout
 
 ```text
 .
 |-- notebooks/
-|   `-- lti_discrete_time_low_level.ipynb
+|   |-- lti_discrete_time_low_level.ipynb
+|   |-- lti_gaussian_low_level.ipynb
+|   `-- lti_gaussian_low_level_copy.ipynb
 |-- src/
+|   |-- hmc_for_tough_likelihoods/
+|   |   `-- __init__.py
+|   |-- manual_ct_inference/
+|   |   |-- __init__.py
+|   |   |-- lti_gaussian.py
+|   |   `-- plot_utils.py
 |   `-- manual_discrete_time_inference/
 |       |-- __init__.py
 |       |-- lti_discrete.py
@@ -58,6 +83,17 @@ The core Python implementation lives under:
 |-- pyproject.toml
 `-- uv.lock
 ```
+
+## Benchmarks
+
+The two current benchmarks play different roles:
+
+- `lti_discrete_time_low_level.ipynb`: fast, mild, and easy to iterate on
+- `lti_gaussian_low_level.ipynb`: slow, harsher, and intended to expose more
+  serious failure modes
+
+If you are new to the repo, start with the discrete-time notebook. If you want
+the more difficult stress test, move to the continuous-time notebook.
 
 ## Requirements
 
@@ -74,22 +110,34 @@ From a fresh clone:
 uv sync
 ```
 
-Launch Jupyter Lab:
+Launch the discrete-time notebook:
 
 ```bash
 uv run jupyter lab notebooks/lti_discrete_time_low_level.ipynb
 ```
 
-Or execute the notebook non-interactively:
+Launch the continuous-time notebook:
+
+```bash
+uv run jupyter lab notebooks/lti_gaussian_low_level.ipynb
+```
+
+Or execute either notebook non-interactively:
 
 ```bash
 uv run jupyter nbconvert --to notebook --execute --inplace \
   notebooks/lti_discrete_time_low_level.ipynb
 ```
 
+```bash
+uv run jupyter nbconvert --to notebook --execute --inplace \
+  notebooks/lti_gaussian_low_level.ipynb
+```
+
 ## Using The Code
 
-After installing dependencies, you can import the package directly:
+After installing dependencies, you can import the discrete-time package through
+the clean public API:
 
 ```python
 from hmc_for_tough_likelihoods import (
@@ -101,24 +149,41 @@ from hmc_for_tough_likelihoods import (
 )
 ```
 
-The core implementation is in
-[`src/manual_discrete_time_inference/lti_discrete.py`](src/manual_discrete_time_inference/lti_discrete.py).
+The continuous-time notebook currently imports its backing code directly from:
+
+```python
+from manual_ct_inference import (
+    kalman_filter_loglik,
+    make_blackjax_logdensity,
+    particle_filter_loglik,
+    run_blackjax_nuts_1d,
+    simulate_lti_gaussian_euler_maruyama,
+)
+```
+
+The main implementations live in:
+
+- [`src/manual_discrete_time_inference/lti_discrete.py`](src/manual_discrete_time_inference/lti_discrete.py)
+- [`src/manual_ct_inference/lti_gaussian.py`](src/manual_ct_inference/lti_gaussian.py)
 
 ## Why This Repo Exists
 
 This project is useful as a compact research sandbox when you want to:
 
 - study how approximate likelihoods alter posterior geometry
-- compare exact and particle-based inference in a controlled setting
+- compare mild and catastrophic failure regimes in a controlled setting
 - identify failure modes for gradient-based samplers on rough likelihoods
-- prototype more robust inference strategies for tough state-space problems
+- prototype more robust HMC- and NUTS-like strategies for tough state-space
+  problems
 - keep the implementation small enough to read end-to-end
 
 ## Development Notes
 
 - Dependencies are locked in `uv.lock`.
 - Source code uses a `src/` layout.
-- The notebook is intended to be the easiest place to start.
+- The discrete-time notebook is the easiest place to start.
+- The continuous-time notebook is intentionally slower and more computationally
+  demanding.
 
 If you want to turn this folder into a standalone Git repository locally:
 
@@ -130,6 +195,11 @@ git commit -m "Initial commit"
 
 ## Status
 
-This repository currently documents and ships the discrete-time example above.
-If additional continuous-time examples are added later, they should be
-documented as separate notebook/package sections rather than assumed here.
+The discrete-time and continuous-time LTI examples are both now included.
+
+- The discrete-time case is the fast, mild benchmark.
+- The continuous-time case is the slow, more pathological benchmark.
+
+Future additions can extend this ladder of difficulty, but these two cases are
+the current baseline pair for comparing exact and approximate likelihood
+surfaces.
