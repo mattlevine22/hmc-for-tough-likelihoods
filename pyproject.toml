@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "arviz>=0.18,<1.0.0",
     "blackjax>=1.2,<2.0.0",
+    "diffrax>=0.7,<1.0.0",
     "ipykernel>=6.29",
     "jax==0.6.2",
     "jaxlib==0.6.2",
@@ -21,4 +22,4 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/hmc_for_tough_likelihoods", "src/manual_discrete_time_inference"]
+packages = ["src/hmc_for_tough_likelihoods", "src/manual_ct_inference", "src/manual_discrete_time_inference"]
