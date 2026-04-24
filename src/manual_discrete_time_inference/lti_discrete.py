@@ -354,3 +354,37 @@ def run_blackjax_nuts_1d(
         "state": state,
         "parameters": parameters,
     }
+
+
+def run_numpyro_nuts_1d(
+    logdensity_fn,
+    seed: int,
+    *,
+    init_position: float = 0.35,
+    num_warmup: int = 50,
+    num_samples: int = 50,
+):
+    import numpyro
+    from numpyro.infer import MCMC, NUTS
+
+    numpyro.set_host_device_count(1)
+
+    def potential_fn(alpha):
+        return -logdensity_fn(alpha)
+
+    kernel = NUTS(potential_fn=potential_fn)
+    mcmc = MCMC(
+        kernel,
+        num_warmup=num_warmup,
+        num_samples=num_samples,
+        progress_bar=False,
+    )
+    initial_position = jnp.asarray(init_position)
+    mcmc.run(jr.PRNGKey(seed), init_params=initial_position)
+    samples = mcmc.get_samples(group_by_chain=False)
+    extra_fields = mcmc.get_extra_fields()
+    return {
+        "samples": samples,
+        "extra_fields": extra_fields,
+        "mcmc": mcmc,
+    }

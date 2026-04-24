@@ -5,6 +5,7 @@ from .lti_discrete import (
     make_lti_discrete_system_with_overrides,
     particle_filter_loglik,
     run_blackjax_nuts_1d,
+    run_numpyro_nuts_1d,
     simulate_lti_discrete_gaussian,
 )
 from .plot_utils import plot_lti_filter_comparison, plot_lti_synthetic_data
@@ -18,5 +19,6 @@ __all__ = [
     "plot_lti_filter_comparison",
     "plot_lti_synthetic_data",
     "run_blackjax_nuts_1d",
+    "run_numpyro_nuts_1d",
     "simulate_lti_discrete_gaussian",
 ]
