@@ -6,8 +6,6 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import jax.scipy as jsp
-
-
 Array = jax.Array
 
 
@@ -387,4 +385,639 @@ def run_numpyro_nuts_1d(
         "samples": samples,
         "extra_fields": extra_fields,
         "mcmc": mcmc,
+    }
+
+
+def run_walnuts_1d(
+    logdensity_fn,
+    seed: int,
+    *,
+    init_position: float = 0.35,
+    num_warmup: int = 50,
+    num_samples: int = 50,
+    step_size: float = 0.05,
+    delta: float = 0.5,
+    i_max: int = 8,
+    max_ell: int = 8,
+):
+    raw_logdensity_fn = logdensity_fn
+    logdensity_fn = jax.jit(lambda alpha: raw_logdensity_fn(alpha))
+    grad_logdensity_fn = jax.jit(jax.grad(lambda alpha: raw_logdensity_fn(alpha)))
+    max_levels = i_max + 1
+
+    def leapfrog(theta: Array, rho: Array, h: Array, n_steps: int) -> tuple[Array, Array]:
+        grad0 = grad_logdensity_fn(theta)
+
+        def body_fn(_, carry):
+            theta_curr, rho_curr, grad_curr = carry
+            rho_half = rho_curr + 0.5 * h * grad_curr
+            theta_new = theta_curr + h * rho_half
+            grad_new = grad_logdensity_fn(theta_new)
+            rho_new = rho_half + 0.5 * h * grad_new
+            return theta_new, rho_new, grad_new
+
+        theta_out, rho_out, _ = jax.lax.fori_loop(0, n_steps, body_fn, (theta, rho, grad0))
+        return theta_out, rho_out
+
+    def hamiltonian(theta: Array, rho: Array) -> Array:
+        return -logdensity_fn(theta) + 0.5 * rho * rho
+
+    def logsumexp2(a: Array, b: Array) -> Array:
+        m = jnp.maximum(a, b)
+        both_finite = jnp.isfinite(a) & jnp.isfinite(b)
+        return jnp.where(
+            both_finite,
+            m + jnp.log(jnp.exp(a - m) + jnp.exp(b - m)),
+            jnp.where(jnp.isfinite(a), a, b),
+        )
+
+    def is_u_turn(l_theta: Array, l_rho: Array, r_theta: Array, r_rho: Array) -> Array:
+        dtheta = r_theta - l_theta
+        return (l_rho * dtheta < 0.0) | (r_rho * dtheta < 0.0)
+
+    def p_micro_pmf(j: Array, i: Array) -> Array:
+        return jnp.where(
+            j == i,
+            2.0 / 3.0,
+            jnp.where(j == i + 1, 1.0 / 3.0, 0.0),
+        )
+
+    def micro(theta_0: Array, rho_0: Array, h_macro: Array, local_delta: Array) -> Array:
+        def cond_fn(carry):
+            ell, result, done = carry
+            return (ell <= max_ell) & (~done)
+
+        def body_fn(carry):
+            ell, result, done = carry
+            n_substeps = 1 << ell
+            h = h_macro / n_substeps
+            energy0 = hamiltonian(theta_0, rho_0)
+
+            def step_fn(_, state):
+                theta_curr, rho_curr, energy_max, energy_min, bad = state
+
+                def active_fn(active_state):
+                    theta_a, rho_a, energy_max_a, energy_min_a, _bad_a = active_state
+                    theta_new, rho_new = leapfrog(theta_a, rho_a, h, 1)
+                    energy_new = hamiltonian(theta_new, rho_new)
+                    energy_max_new = jnp.maximum(energy_max_a, energy_new)
+                    energy_min_new = jnp.minimum(energy_min_a, energy_new)
+                    bad_new = (energy_max_new - energy_min_new) > local_delta
+                    return theta_new, rho_new, energy_max_new, energy_min_new, bad_new
+
+                return jax.lax.cond(
+                    bad,
+                    lambda s: s,
+                    active_fn,
+                    state,
+                )
+
+            _, _, _, _, bad = jax.lax.fori_loop(
+                0,
+                n_substeps,
+                step_fn,
+                (theta_0, rho_0, energy0, energy0, jnp.array(False)),
+            )
+            success = ~bad
+            return ell + 1, jnp.where(success, ell, result), done | success
+
+        ell0 = jnp.array(0, dtype=jnp.int32)
+        result0 = jnp.array(max_ell + 1, dtype=jnp.int32)
+        done0 = jnp.array(False)
+        _, result, _ = jax.lax.while_loop(cond_fn, body_fn, (ell0, result0, done0))
+        return result
+
+    def sample_bernoulli_choice(key: Array) -> Array:
+        return jnp.where(jr.bernoulli(key, p=2.0 / 3.0), 0, 1)
+
+    def build_leaf(
+        key: Array,
+        theta: Array,
+        rho: Array,
+        logw_start: Array,
+        direction: Array,
+    ) -> tuple[Array, Array, Array, Array]:
+        energy_old = hamiltonian(theta, rho)
+        sample_key, next_key = jr.split(key)
+
+        def forward_fn(_):
+            ell_f = micro(theta, rho, step_size, delta)
+            ell = ell_f + sample_bernoulli_choice(sample_key)
+            n_substeps = 1 << ell
+            theta_1, rho_1 = leapfrog(theta, rho, step_size / n_substeps, n_substeps)
+            ell_b = micro(theta_1, -rho_1, step_size, delta)
+            return theta_1, rho_1, ell, ell_f, ell_b
+
+        def backward_fn(_):
+            rho_neg = -rho
+            ell_b = micro(theta, rho_neg, step_size, delta)
+            ell = ell_b + sample_bernoulli_choice(sample_key)
+            n_substeps = 1 << ell
+            theta_1, rho_1_neg = leapfrog(theta, rho_neg, step_size / n_substeps, n_substeps)
+            rho_1 = -rho_1_neg
+            ell_f = micro(theta_1, rho_1, step_size, delta)
+            return theta_1, rho_1, ell, ell_b, ell_f
+
+        theta_1, rho_1, ell, base_ell, reverse_ell = jax.lax.cond(
+            direction == 1,
+            forward_fn,
+            backward_fn,
+            operand=None,
+        )
+        p_forward = p_micro_pmf(ell, base_ell)
+        p_target = p_micro_pmf(ell, reverse_ell)
+        energy_new = hamiltonian(theta_1, rho_1)
+
+        def finite_weight_fn(_):
+            return logw_start + (energy_old - energy_new) + jnp.log(p_target) - jnp.log(p_forward)
+
+        logw_new = jax.lax.cond(
+            (p_target > 0.0) & (p_forward > 0.0),
+            finite_weight_fn,
+            lambda _: -jnp.inf,
+            operand=None,
+        )
+        return theta_1, rho_1, logw_new, next_key
+
+    def barker_pick_right(key: Array, logt_left: Array, logt_right: Array) -> Array:
+        log_total = logsumexp2(logt_left, logt_right)
+        prob_right = jnp.where(jnp.isfinite(log_total), jnp.exp(logt_right - log_total), 0.0)
+        return jr.bernoulli(key, p=prob_right)
+
+    def build_subtree(
+        key: Array,
+        theta_start: Array,
+        rho_start: Array,
+        logw_start: Array,
+        direction: Array,
+        depth: Array,
+    ) -> tuple[Array, Array, Array, Array, Array, Array, Array, Array, Array, Array]:
+        stk_l_th0 = jnp.zeros((max_levels,))
+        stk_l_rh0 = jnp.zeros((max_levels,))
+        stk_r_th0 = jnp.zeros((max_levels,))
+        stk_r_rh0 = jnp.zeros((max_levels,))
+        stk_se_th0 = jnp.zeros((max_levels,))
+        stk_se_rh0 = jnp.zeros((max_levels,))
+        stk_logt0 = jnp.full((max_levels,), -jnp.inf)
+        stk_valid0 = jnp.zeros((max_levels,), dtype=bool)
+
+        n_leaves = 1 << depth
+
+        def leaf_body(_, carry):
+            (
+                theta_curr,
+                rho_curr,
+                logw_curr,
+                stk_l_th,
+                stk_l_rh,
+                stk_r_th,
+                stk_r_rh,
+                stk_se_th,
+                stk_se_rh,
+                stk_logt,
+                stk_valid,
+                root_l_th,
+                root_l_rh,
+                root_r_th,
+                root_r_rh,
+                root_se_th,
+                root_se_rh,
+                root_logt,
+                root_loge,
+                subtree_uturn,
+                loop_key,
+            ) = carry
+
+            def active_leaf_fn(active_carry):
+                (
+                    theta_curr_a,
+                    rho_curr_a,
+                    logw_curr_a,
+                    stk_l_th_a,
+                    stk_l_rh_a,
+                    stk_r_th_a,
+                    stk_r_rh_a,
+                    stk_se_th_a,
+                    stk_se_rh_a,
+                    stk_logt_a,
+                    stk_valid_a,
+                    root_l_th_a,
+                    root_l_rh_a,
+                    root_r_th_a,
+                    root_r_rh_a,
+                    root_se_th_a,
+                    root_se_rh_a,
+                    root_logt_a,
+                    root_loge_a,
+                    subtree_uturn_a,
+                    loop_key_a,
+                ) = active_carry
+
+                leaf_key, merge_seed_key, next_loop_key = jr.split(loop_key_a, 3)
+                theta_1, rho_1, logw_new, _ = build_leaf(
+                    leaf_key,
+                    theta_curr_a,
+                    rho_curr_a,
+                    logw_curr_a,
+                    direction,
+                )
+
+                merge_init = (
+                    jnp.array(0, dtype=jnp.int32),
+                    theta_1,
+                    rho_1,
+                    theta_1,
+                    rho_1,
+                    theta_1,
+                    rho_1,
+                    logw_new,
+                    stk_l_th_a,
+                    stk_l_rh_a,
+                    stk_r_th_a,
+                    stk_r_rh_a,
+                    stk_se_th_a,
+                    stk_se_rh_a,
+                    stk_logt_a,
+                    stk_valid_a,
+                    jnp.array(False),
+                    root_l_th_a,
+                    root_l_rh_a,
+                    root_r_th_a,
+                    root_r_rh_a,
+                    root_se_th_a,
+                    root_se_rh_a,
+                    root_logt_a,
+                    logw_new,
+                    merge_seed_key,
+                )
+
+                def merge_cond_fn(merge_carry):
+                    j = merge_carry[0]
+                    stk_valid_m = merge_carry[15]
+                    merge_done = merge_carry[16]
+                    return (j < depth) & stk_valid_m[j] & (~merge_done)
+
+                def merge_body_fn(merge_carry):
+                    (
+                        j,
+                        cur_l_th,
+                        cur_l_rh,
+                        cur_r_th,
+                        cur_r_rh,
+                        cur_se_th,
+                        cur_se_rh,
+                        cur_logt,
+                        stk_l_th_m,
+                        stk_l_rh_m,
+                        stk_r_th_m,
+                        stk_r_rh_m,
+                        stk_se_th_m,
+                        stk_se_rh_m,
+                        stk_logt_m,
+                        stk_valid_m,
+                        merge_done,
+                        root_l_th_m,
+                        root_l_rh_m,
+                        root_r_th_m,
+                        root_r_rh_m,
+                        root_se_th_m,
+                        root_se_rh_m,
+                        root_logt_m,
+                        root_loge_m,
+                        merge_key_m,
+                    ) = merge_carry
+
+                    merged_l_th = jnp.where(direction == 1, stk_l_th_m[j], cur_l_th)
+                    merged_l_rh = jnp.where(direction == 1, stk_l_rh_m[j], cur_l_rh)
+                    merged_r_th = jnp.where(direction == 1, cur_r_th, stk_r_th_m[j])
+                    merged_r_rh = jnp.where(direction == 1, cur_r_rh, stk_r_rh_m[j])
+
+                    uturn_here = is_u_turn(merged_l_th, merged_l_rh, merged_r_th, merged_r_rh)
+                    pick_key, next_merge_key = jr.split(merge_key_m)
+                    pick_right = barker_pick_right(pick_key, stk_logt_m[j], cur_logt)
+                    new_se_th = jnp.where(pick_right, cur_se_th, stk_se_th_m[j])
+                    new_se_rh = jnp.where(pick_right, cur_se_rh, stk_se_rh_m[j])
+                    merged_logt = logsumexp2(stk_logt_m[j], cur_logt)
+                    stk_valid_new = stk_valid_m.at[j].set(False)
+
+                    return (
+                        j + 1,
+                        merged_l_th,
+                        merged_l_rh,
+                        merged_r_th,
+                        merged_r_rh,
+                        new_se_th,
+                        new_se_rh,
+                        merged_logt,
+                        stk_l_th_m,
+                        stk_l_rh_m,
+                        stk_r_th_m,
+                        stk_r_rh_m,
+                        stk_se_th_m,
+                        stk_se_rh_m,
+                        stk_logt_m,
+                        stk_valid_new,
+                        uturn_here,
+                        jnp.where(uturn_here, merged_l_th, root_l_th_m),
+                        jnp.where(uturn_here, merged_l_rh, root_l_rh_m),
+                        jnp.where(uturn_here, merged_r_th, root_r_th_m),
+                        jnp.where(uturn_here, merged_r_rh, root_r_rh_m),
+                        jnp.where(uturn_here, new_se_th, root_se_th_m),
+                        jnp.where(uturn_here, new_se_rh, root_se_rh_m),
+                        jnp.where(uturn_here, merged_logt, root_logt_m),
+                        root_loge_m,
+                        next_merge_key,
+                    )
+
+                merge_final = jax.lax.while_loop(merge_cond_fn, merge_body_fn, merge_init)
+                (
+                    j_final,
+                    cur_l_th,
+                    cur_l_rh,
+                    cur_r_th,
+                    cur_r_rh,
+                    cur_se_th,
+                    cur_se_rh,
+                    cur_logt,
+                    stk_l_th_a,
+                    stk_l_rh_a,
+                    stk_r_th_a,
+                    stk_r_rh_a,
+                    stk_se_th_a,
+                    stk_se_rh_a,
+                    stk_logt_a,
+                    stk_valid_a,
+                    merge_done,
+                    root_l_th_a,
+                    root_l_rh_a,
+                    root_r_th_a,
+                    root_r_rh_a,
+                    root_se_th_a,
+                    root_se_rh_a,
+                    root_logt_a,
+                    root_loge_a,
+                    _,
+                ) = merge_final
+
+                def park_fn(_):
+                    return (
+                        stk_l_th_a.at[j_final].set(cur_l_th),
+                        stk_l_rh_a.at[j_final].set(cur_l_rh),
+                        stk_r_th_a.at[j_final].set(cur_r_th),
+                        stk_r_rh_a.at[j_final].set(cur_r_rh),
+                        stk_se_th_a.at[j_final].set(cur_se_th),
+                        stk_se_rh_a.at[j_final].set(cur_se_rh),
+                        stk_logt_a.at[j_final].set(cur_logt),
+                        stk_valid_a.at[j_final].set(True),
+                    )
+
+                def no_park_fn(_):
+                    return (
+                        stk_l_th_a,
+                        stk_l_rh_a,
+                        stk_r_th_a,
+                        stk_r_rh_a,
+                        stk_se_th_a,
+                        stk_se_rh_a,
+                        stk_logt_a,
+                        stk_valid_a,
+                    )
+
+                (
+                    stk_l_th_a,
+                    stk_l_rh_a,
+                    stk_r_th_a,
+                    stk_r_rh_a,
+                    stk_se_th_a,
+                    stk_se_rh_a,
+                    stk_logt_a,
+                    stk_valid_a,
+                ) = jax.lax.cond(merge_done, no_park_fn, park_fn, operand=None)
+
+                return (
+                    theta_1,
+                    rho_1,
+                    logw_new,
+                    stk_l_th_a,
+                    stk_l_rh_a,
+                    stk_r_th_a,
+                    stk_r_rh_a,
+                    stk_se_th_a,
+                    stk_se_rh_a,
+                    stk_logt_a,
+                    stk_valid_a,
+                    root_l_th_a,
+                    root_l_rh_a,
+                    root_r_th_a,
+                    root_r_rh_a,
+                    root_se_th_a,
+                    root_se_rh_a,
+                    root_logt_a,
+                    root_loge_a,
+                    merge_done,
+                    next_loop_key,
+                )
+
+            return jax.lax.cond(subtree_uturn, lambda c: c, active_leaf_fn, carry)
+
+        init_carry = (
+            theta_start,
+            rho_start,
+            logw_start,
+            stk_l_th0,
+            stk_l_rh0,
+            stk_r_th0,
+            stk_r_rh0,
+            stk_se_th0,
+            stk_se_rh0,
+            stk_logt0,
+            stk_valid0,
+            theta_start,
+            rho_start,
+            theta_start,
+            rho_start,
+            theta_start,
+            rho_start,
+            -jnp.inf,
+            logw_start,
+            jnp.array(False),
+            key,
+        )
+        final_carry = jax.lax.fori_loop(0, n_leaves, leaf_body, init_carry)
+        (
+            _theta_curr,
+            _rho_curr,
+            logw_curr,
+            stk_l_th,
+            stk_l_rh,
+            stk_r_th,
+            stk_r_rh,
+            stk_se_th,
+            stk_se_rh,
+            stk_logt,
+            _stk_valid,
+            root_l_th,
+            root_l_rh,
+            root_r_th,
+            root_r_rh,
+            root_se_th,
+            root_se_rh,
+            root_logt,
+            root_loge,
+            subtree_uturn,
+            next_key,
+        ) = final_carry
+
+        return (
+            jnp.where(subtree_uturn, root_l_th, stk_l_th[depth]),
+            jnp.where(subtree_uturn, root_l_rh, stk_l_rh[depth]),
+            jnp.where(subtree_uturn, root_r_th, stk_r_th[depth]),
+            jnp.where(subtree_uturn, root_r_rh, stk_r_rh[depth]),
+            jnp.where(subtree_uturn, root_se_th, stk_se_th[depth]),
+            jnp.where(subtree_uturn, root_se_rh, stk_se_rh[depth]),
+            jnp.where(subtree_uturn, root_logt, stk_logt[depth]),
+            jnp.where(subtree_uturn, root_loge, logw_curr),
+            subtree_uturn,
+            next_key,
+        )
+
+    def walnuts_transition(theta: Array, key: Array) -> tuple[Array, Array, Array, Array]:
+        rho_key, loop_key = jr.split(key)
+        rho = jr.normal(rho_key)
+        logw_0 = logdensity_fn(theta) - 0.5 * rho * rho
+
+        init_carry = (
+            theta,
+            rho,
+            theta,
+            rho,
+            theta,
+            logw_0,
+            logw_0,
+            logw_0,
+            jnp.array(1, dtype=jnp.int32),
+            jnp.array(0, dtype=jnp.int32),
+            jnp.array(False),
+            loop_key,
+        )
+
+        def outer_body(i, carry):
+            (
+                glob_l_th,
+                glob_l_rh,
+                glob_r_th,
+                glob_r_rh,
+                theta_tilde,
+                glob_logt,
+                glob_loge_fwd,
+                glob_loge_bwd,
+                n_leaves,
+                depth_reached,
+                done,
+                outer_key,
+            ) = carry
+
+            def active_outer_fn(active_carry):
+                (
+                    glob_l_th_a,
+                    glob_l_rh_a,
+                    glob_r_th_a,
+                    glob_r_rh_a,
+                    theta_tilde_a,
+                    glob_logt_a,
+                    glob_loge_fwd_a,
+                    glob_loge_bwd_a,
+                    n_leaves_a,
+                    _depth_reached_a,
+                    _done_a,
+                    outer_key_a,
+                ) = active_carry
+
+                dir_key, subtree_key, accept_key, next_outer_key = jr.split(outer_key_a, 4)
+                direction = jnp.where(jr.bernoulli(dir_key), 1, -1)
+
+                subtree_args = (
+                    jnp.where(direction == 1, glob_r_th_a, glob_l_th_a),
+                    jnp.where(direction == 1, glob_r_rh_a, glob_l_rh_a),
+                    jnp.where(direction == 1, glob_loge_fwd_a, glob_loge_bwd_a),
+                )
+
+                e_l_th, e_l_rh, e_r_th, e_r_rh, e_se_th, _e_se_rh, e_logt, e_loge, e_uturn, _ = build_subtree(
+                    subtree_key,
+                    subtree_args[0],
+                    subtree_args[1],
+                    subtree_args[2],
+                    direction,
+                    jnp.asarray(i, dtype=jnp.int32),
+                )
+
+                accept_swap = jnp.log(jr.uniform(accept_key)) <= (e_logt - glob_logt_a)
+                theta_tilde_new = jnp.where(accept_swap, e_se_th, theta_tilde_a)
+                glob_logt_new = logsumexp2(glob_logt_a, e_logt)
+                glob_r_th_new = jnp.where(direction == 1, e_r_th, glob_r_th_a)
+                glob_r_rh_new = jnp.where(direction == 1, e_r_rh, glob_r_rh_a)
+                glob_l_th_new = jnp.where(direction == -1, e_l_th, glob_l_th_a)
+                glob_l_rh_new = jnp.where(direction == -1, e_l_rh, glob_l_rh_a)
+                glob_loge_fwd_new = jnp.where(direction == 1, e_loge, glob_loge_fwd_a)
+                glob_loge_bwd_new = jnp.where(direction == -1, e_loge, glob_loge_bwd_a)
+                global_uturn = is_u_turn(glob_l_th_new, glob_l_rh_new, glob_r_th_new, glob_r_rh_new)
+                done_new = e_uturn | global_uturn
+
+                return (
+                    glob_l_th_new,
+                    glob_l_rh_new,
+                    glob_r_th_new,
+                    glob_r_rh_new,
+                    theta_tilde_new,
+                    glob_logt_new,
+                    glob_loge_fwd_new,
+                    glob_loge_bwd_new,
+                    n_leaves_a + (1 << i),
+                    jnp.asarray(i + 1, dtype=jnp.int32),
+                    done_new,
+                    next_outer_key,
+                )
+
+            return jax.lax.cond(done, lambda c: c, active_outer_fn, carry)
+
+        final_carry = jax.lax.fori_loop(0, i_max, outer_body, init_carry)
+        (
+            _glob_l_th,
+            _glob_l_rh,
+            _glob_r_th,
+            _glob_r_rh,
+            theta_tilde,
+            _glob_logt,
+            _glob_loge_fwd,
+            _glob_loge_bwd,
+            n_leaves,
+            depth_reached,
+            _done,
+            next_key,
+        ) = final_carry
+        return theta_tilde, depth_reached, n_leaves, next_key
+
+    @jax.jit
+    def inference_loop(initial_theta: Array, rng_key: Array):
+        n_total = num_warmup + num_samples
+        keys = jr.split(rng_key, n_total)
+
+        def one_step(theta_curr, key_curr):
+            theta_next, depth, orbit_size, _ = walnuts_transition(theta_curr, key_curr)
+            return theta_next, (theta_next, depth, orbit_size)
+
+        _, (all_samples, depths, orbit_sizes) = jax.lax.scan(one_step, initial_theta, keys)
+        return all_samples, depths, orbit_sizes
+
+    initial_theta = jnp.asarray(init_position)
+    all_samples, depths, orbit_sizes = inference_loop(initial_theta, jr.PRNGKey(seed))
+    return {
+        "samples": all_samples[num_warmup:],
+        "warmup_samples": all_samples[:num_warmup],
+        "depths": depths[num_warmup:],
+        "orbit_sizes": orbit_sizes[num_warmup:],
+        "step_size": step_size,
+        "delta": delta,
+        "i_max": i_max,
+        "max_ell": max_ell,
     }

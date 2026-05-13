@@ -51,11 +51,17 @@ def plot_lti_filter_comparison(
     grad_band_q50,
     grad_band_q95,
     grad_numeric_q50,
+    hess_band_q05,
+    hess_band_q50,
+    hess_band_q95,
+    hess_numeric_q50,
     comparison_curves: Sequence[dict],
     parameter_name: str = "alpha",
     base_profile_label: str = "PF profile band",
     base_grad_label: str = "PF autodiff band",
     base_numeric_grad_label: str = "PF numerical grad",
+    base_hess_label: str = "PF autodiff hessian band",
+    base_numeric_hess_label: str = "PF numerical hessian",
 ):
     parameter_grid = _as_numpy(parameter_grid)
     profile_band_q05 = _as_numpy(profile_band_q05)
@@ -65,16 +71,20 @@ def plot_lti_filter_comparison(
     grad_band_q50 = _as_numpy(grad_band_q50)
     grad_band_q95 = _as_numpy(grad_band_q95)
     grad_numeric_q50 = _as_numpy(grad_numeric_q50)
+    hess_band_q05 = _as_numpy(hess_band_q05)
+    hess_band_q50 = _as_numpy(hess_band_q50)
+    hess_band_q95 = _as_numpy(hess_band_q95)
+    hess_numeric_q50 = _as_numpy(hess_numeric_q50)
 
     fig, axes = plt.subplots(
-        2,
+        3,
         1,
-        figsize=(10, 8),
+        figsize=(10, 11),
         sharex=True,
         constrained_layout=True,
     )
 
-    profile_ax, grad_ax = axes
+    profile_ax, grad_ax, hess_ax = axes
 
     profile_ax.fill_between(
         parameter_grid,
@@ -118,6 +128,31 @@ def plot_lti_filter_comparison(
         label=base_numeric_grad_label,
     )
 
+    hess_ax.fill_between(
+        parameter_grid,
+        hess_band_q05,
+        hess_band_q95,
+        color="C1",
+        alpha=0.18,
+        label=base_hess_label,
+    )
+    hess_ax.plot(
+        parameter_grid,
+        hess_band_q50,
+        color="C1",
+        linewidth=2.0,
+        linestyle="--",
+        label=f"{base_hess_label} median",
+    )
+    hess_ax.plot(
+        parameter_grid,
+        hess_numeric_q50,
+        color="0.25",
+        linewidth=1.8,
+        linestyle=":",
+        label=base_numeric_hess_label,
+    )
+
     for curve in comparison_curves:
         color = curve.get("color", "C0")
         linestyle = curve.get("linestyle", "-")
@@ -143,6 +178,15 @@ def plot_lti_filter_comparison(
             linewidth=linewidth,
             label=label,
         )
+        hess_ax.plot(
+            parameter_grid,
+            _as_numpy(curve["hess"]),
+            color=color,
+            linestyle=linestyle,
+            alpha=alpha,
+            linewidth=linewidth,
+            label=label,
+        )
 
     profile_ax.set_ylabel("log marginal likelihood")
     profile_ax.set_title("Profile likelihood comparison")
@@ -154,5 +198,11 @@ def plot_lti_filter_comparison(
     grad_ax.set_title("Gradient comparison")
     grad_ax.grid(alpha=0.2)
     grad_ax.legend(loc="best")
+
+    hess_ax.set_xlabel(parameter_name)
+    hess_ax.set_ylabel(f"d²/d{parameter_name}² log likelihood")
+    hess_ax.set_title("Hessian comparison")
+    hess_ax.grid(alpha=0.2)
+    hess_ax.legend(loc="best")
 
     return fig, axes

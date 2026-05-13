@@ -8,6 +8,7 @@ from manual_discrete_time_inference import (
     plot_lti_synthetic_data,
     run_blackjax_nuts_1d,
     run_numpyro_nuts_1d,
+    run_walnuts_1d,
     simulate_lti_discrete_gaussian,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "plot_lti_synthetic_data",
     "run_blackjax_nuts_1d",
     "run_numpyro_nuts_1d",
+    "run_walnuts_1d",
     "simulate_lti_discrete_gaussian",
 ]
