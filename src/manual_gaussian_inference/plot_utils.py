@@ -163,12 +163,12 @@ def plot_nuts_walnuts_heatmaps(
             **norm_kw,
         )
         ax.set_title(title)
-        ax.set_xlabel("A")
+        ax.set_xlabel(xlabel)
         ax.set_xticks(np.arange(n_a))
         ax.set_xticklabels([_fmt_tick(a) for a in a_grid], rotation=45, ha="right")
         sns.despine(ax=ax)
 
-    ax_n.set_ylabel(r"$\omega$")
+    ax_n.set_ylabel(ylabel)
     ax_n.set_yticks(np.arange(n_w))
     ax_n.set_yticklabels([_fmt_tick(w) for w in omega_grid])
     ax_w.tick_params(labelleft=False)
