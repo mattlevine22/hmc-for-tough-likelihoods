@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/hmc_for_tough_likelihoods", "src/manual_ct_inference", "src/manual_discrete_time_inference", "src/manual_gaussian_inference"]
+packages = ["src/hmc_for_tough_likelihoods", "src/manual_ct_inference", "src/manual_combo_inference", "src/manual_discrete_time_inference", "src/manual_gaussian_inference"]
 
 [tool.uv.sources]
 blackjax = { git = "https://github.com/DanWaxman/blackjax.git", branch = "dw-walnuts" }

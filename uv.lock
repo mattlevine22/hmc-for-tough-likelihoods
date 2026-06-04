@@ -161,8 +161,8 @@ wheels = [
 
 [[package]]
 name = "blackjax"
-version = "0.1.dev644+g671f45c0b"
-source = { git = "https://github.com/DanWaxman/blackjax.git?branch=dw-walnuts#671f45c0bf87fc0f1aa79feaab042a0e7ae327f5" }
+version = "0.1.dev645+g7f7e46804"
+source = { git = "https://github.com/DanWaxman/blackjax.git?branch=dw-walnuts#7f7e4680436b252133d5c1b27fa8a64849625bfc" }
 dependencies = [
     { name = "jax" },
     { name = "jaxlib" },
